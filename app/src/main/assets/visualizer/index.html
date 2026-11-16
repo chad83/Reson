@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reson Visualizer</title>
+<style>
+  :root { color-scheme: dark; font: 1.2rem system-ui,sans-serif; color: #defdf1; background: #050d13; }
+  body { margin: 0; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  header { position: fixed; left: 5vw; top: 6vh; }
+  h1 { margin: 0 0 .6em; font-size: clamp(1.4rem, 4vw, 3rem); }
+  button { font: inherit; border: 0; border-radius: .6em; padding: .65em 1.15em; background: #a4f4cd; color: #09241c; }
+  button:focus-visible { outline: 3px solid white; outline-offset: 5px; }
+  p { max-width: 30em; }
+</style>
+<script src="player.js" defer></script>
+</head>
+<body>
+<canvas aria-hidden="true"></canvas>
+<header>
+<h1>Reson Visualizer</h1>
+<button id="listen">Play on this TV</button>
+<p id="status" role="status"></p>
+</header>
+</body>
+</html>
