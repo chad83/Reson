@@ -99,6 +99,7 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+        app.playbackQueue.restoring.value = true
         val attributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -192,13 +193,17 @@ class PlaybackService : MediaLibraryService() {
             }
         })
         serviceScope.launch {
-            val saved = app.playbackQueue.load()
-            if (saved != null && app.playbackSettings.resumeQueue.value && !queueRecorder.stopping &&
-                player.mediaItemCount == 0 && player.deviceInfo.playbackType == DeviceInfo.PLAYBACK_TYPE_LOCAL
-            ) {
-                local.setMediaItems(saved.tracks.map { it.toMediaItem() }, saved.index, saved.position)
-                saved.shuffleOrder?.let { local.setShuffleOrder(DefaultShuffleOrder(it.toIntArray(), System.nanoTime())) }
-                local.prepare()
+            try {
+                val saved = app.playbackQueue.load()
+                if (saved != null && app.playbackSettings.resumeQueue.value && !queueRecorder.stopping &&
+                    player.mediaItemCount == 0 && player.deviceInfo.playbackType == DeviceInfo.PLAYBACK_TYPE_LOCAL
+                ) {
+                    local.setMediaItems(saved.tracks.map { it.toMediaItem() }, saved.index, saved.position)
+                    saved.shuffleOrder?.let { local.setShuffleOrder(DefaultShuffleOrder(it.toIntArray(), System.nanoTime())) }
+                    local.prepare()
+                }
+            } finally {
+                app.playbackQueue.restoring.value = false
             }
         }
         serviceScope.launch {

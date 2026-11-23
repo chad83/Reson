@@ -1,12 +1,14 @@
 package com.reson.player.ui
 
 import android.graphics.BitmapFactory
+import android.media.MediaRouter
 import androidx.annotation.OptIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -31,6 +33,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -55,6 +58,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -72,10 +76,12 @@ import kotlin.math.roundToLong
 internal fun NowPlayingScreen(
     playback: PlaybackState,
     readPosition: () -> Long,
+    televisionConnected: Boolean,
     onSeek: (Long) -> Unit,
     onBack: () -> Unit,
     onLibrary: () -> Unit,
     onTogglePlayback: () -> Unit,
+    onReconnect: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onQueue: () -> Unit,
@@ -110,91 +116,149 @@ internal fun NowPlayingScreen(
                 }
                 if (playback.mediaId == null) {
                     Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                        Text(
-                            "Choose a track from the library.",
-                            textAlign = TextAlign.Center,
-                            color = colors.onSurfaceVariant,
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                when {
+                                    playback.connectionFailed -> "Couldn’t reconnect to playback."
+                                    !playback.connected -> "Connecting to playback…"
+                                    else -> "Choose a track from the library."
+                                },
+                                textAlign = TextAlign.Center,
+                                color = colors.onSurfaceVariant,
+                            )
+                            if (playback.connectionFailed) TextButton(onClick = onReconnect) { Text("Retry") }
+                        }
                     }
                 } else {
-                    Column(
-                        Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
-                            .padding(start = 24.dp, end = 24.dp, top = 12.dp, bottom = 28.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Artwork(
-                            artwork = playback.artwork,
-                            modifier = Modifier.widthIn(max = 360.dp).fillMaxWidth().aspectRatio(1f),
-                            cornerSize = 30.dp,
-                        )
-                        Spacer(Modifier.height(26.dp))
-                        Text(
-                            playback.title.ifBlank { "Untitled track" },
-                            style = MaterialTheme.typography.headlineMedium,
-                            textAlign = TextAlign.Center,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            listOfNotNull(playback.artist, playback.album).joinToString(" · ")
-                                .ifBlank { "Unknown artist" },
-                            modifier = Modifier.padding(top = 5.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Row(
-                            Modifier.padding(top = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                        val artworkSize = (maxHeight - 100.dp).coerceIn(72.dp, 360.dp)
+                        Column(
+                            Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                                .padding(start = 24.dp, end = 24.dp, top = 12.dp, bottom = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            Glyph(if (playback.isNas && !playback.hasDownload) Symbol.Nas else Symbol.Phone, colors.primary, Modifier.size(15.dp))
-                            Text(playback.sourceLabel,
-                                color = colors.primary, style = MaterialTheme.typography.labelMedium)
-                        }
-                        if (onDownload != null) {
-                            TextButton(onClick = onDownload, enabled = !downloadQueued) {
-                                Text(if (downloadQueued) "Download queued" else "Download")
+                            Artwork(
+                                artwork = playback.artwork,
+                                modifier = Modifier.widthIn(max = artworkSize).fillMaxWidth().aspectRatio(1f),
+                                cornerSize = 30.dp,
+                            )
+                            Spacer(Modifier.height(26.dp))
+                            Text(
+                                playback.title.ifBlank { "Untitled track" },
+                                style = MaterialTheme.typography.headlineMedium,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                listOfNotNull(playback.artist, playback.album).joinToString(" · ")
+                                    .ifBlank { "Unknown artist" },
+                                modifier = Modifier.padding(top = 5.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Row(
+                                Modifier.padding(top = 12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Glyph(if (playback.isNas && !playback.hasDownload) Symbol.Nas else Symbol.Phone, colors.primary, Modifier.size(15.dp))
+                                Text(playback.sourceLabel,
+                                    color = colors.primary, style = MaterialTheme.typography.labelMedium)
+                            }
+                            if (onDownload != null) {
+                                TextButton(onClick = onDownload, enabled = !downloadQueued) {
+                                    Text(if (downloadQueued) "Download queued" else "Download")
+                                }
                             }
                         }
-                        Spacer(Modifier.height(14.dp))
-                        SeekBar(playback, readPosition, onSeek)
-                        if (playback.buffering) {
-                            LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
-                        }
-                        playback.error?.let { message ->
-                            Text(
-                                message,
-                                Modifier.padding(top = 8.dp),
-                                color = colors.error,
-                                textAlign = TextAlign.Center,
-                            )
-                        }
-                        Row(
-                            Modifier.padding(top = 22.dp),
-                            horizontalArrangement = Arrangement.spacedBy(28.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            GlyphButton("Previous track", Symbol.Previous, onPrevious, enabled = playback.canGoPrevious)
-                            PlayButton(playback.playing, onTogglePlayback, size = 74.dp)
-                            GlyphButton("Next track", Symbol.Next, onNext, enabled = playback.canGoNext)
-                        }
-                        FlowRow(
-                            Modifier.padding(top = 12.dp),
-                            horizontalArrangement = Arrangement.Center,
-                        ) {
-                            PlaybackModes(playback, onShuffle, onRepeat)
-                            TextButton(onClick = onQueue) { Text("Queue") }
-                            if (onVisualizer != null) TextButton(onClick = onVisualizer) { Text("Visualizer") }
-                            if (trackActions.isNotEmpty()) ActionMenu("Track actions", trackActions)
-                        }
                     }
+                    PlaybackControls(playback, readPosition, televisionConnected, onSeek, onPrevious, onTogglePlayback,
+                        onReconnect, onNext, onShuffle, onRepeat, onQueue, onVisualizer, trackActions)
                 }
             }
         }
     }
+}
+
+@Composable
+private fun PlaybackControls(
+    playback: PlaybackState,
+    readPosition: () -> Long,
+    televisionConnected: Boolean,
+    onSeek: (Long) -> Unit,
+    onPrevious: () -> Unit,
+    onTogglePlayback: () -> Unit,
+    onReconnect: () -> Unit,
+    onNext: () -> Unit,
+    onShuffle: () -> Unit,
+    onRepeat: () -> Unit,
+    onQueue: () -> Unit,
+    onVisualizer: (() -> Unit)?,
+    trackActions: List<MenuAction>,
+) {
+    val output = if (televisionConnected) "TV browser" else playbackOutput(playback.casting)
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (output != null) {
+            Text(output, style = MaterialTheme.typography.labelMedium, maxLines = 1,
+                overflow = TextOverflow.Ellipsis)
+        }
+        SeekBar(playback, readPosition, onSeek)
+        if (playback.buffering) LinearProgressIndicator(Modifier.fillMaxWidth())
+        when {
+            playback.connectionFailed -> TextButton(onClick = onReconnect) { Text("Retry playback connection") }
+            !playback.connected -> Text("Connecting to playback…")
+            else -> playback.error?.let { message ->
+                Text(message, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.CenterVertically) {
+            GlyphButton("Previous track", Symbol.Previous, onPrevious, enabled = playback.connected && playback.canGoPrevious)
+            PlayButton(playback.playing, onTogglePlayback, enabled = playback.connected, size = 64.dp)
+            GlyphButton("Next track", Symbol.Next, onNext, enabled = playback.connected && playback.canGoNext)
+        }
+        FlowRow(horizontalArrangement = Arrangement.Center) {
+            PlaybackModes(playback, onShuffle, onRepeat)
+            TextButton(onClick = onQueue) { Text("Queue") }
+            if (onVisualizer != null) TextButton(onClick = onVisualizer) { Text("Visualizer") }
+            if (trackActions.isNotEmpty()) ActionMenu("Track actions", trackActions)
+        }
+    }
+}
+
+@OptIn(UnstableApi::class)
+@Composable
+private fun playbackOutput(casting: Boolean): String? {
+    val context = LocalContext.current
+    if (casting) {
+        return androidx.media3.cast.Cast.getSingletonInstance(context)
+            .currentCastSession?.castDevice?.friendlyName ?: "Cast"
+    }
+    val router = remember(context) { context.getSystemService(MediaRouter::class.java) } ?: return null
+    fun selectedBluetooth(): String? = router.getSelectedRoute(MediaRouter.ROUTE_TYPE_LIVE_AUDIO)
+        ?.takeIf { it.deviceType == MediaRouter.RouteInfo.DEVICE_TYPE_BLUETOOTH }
+        ?.name?.toString()
+    var output by remember(router) { mutableStateOf(selectedBluetooth()) }
+    DisposableEffect(router) {
+        val listener = object : MediaRouter.SimpleCallback() {
+            override fun onRouteSelected(router: MediaRouter, type: Int, info: MediaRouter.RouteInfo) {
+                output = selectedBluetooth()
+            }
+            override fun onRouteChanged(router: MediaRouter, info: MediaRouter.RouteInfo) {
+                output = selectedBluetooth()
+            }
+        }
+        router.addCallback(MediaRouter.ROUTE_TYPE_LIVE_AUDIO, listener)
+        output = selectedBluetooth()
+        onDispose { router.removeCallback(listener) }
+    }
+    return output
 }
 
 @Composable
@@ -203,7 +267,9 @@ private fun SeekBar(playback: PlaybackState, readPosition: () -> Long, onSeek: (
     var position by remember(playback.mediaId) { mutableLongStateOf(readPosition()) }
     var dragging by remember(playback.mediaId) { mutableStateOf(false) }
     var dragFraction by remember(playback.mediaId) { mutableFloatStateOf(0f) }
-    LaunchedEffect(lifecycle, playback.mediaId) {
+    LaunchedEffect(lifecycle, playback.mediaId, playback.connected) {
+        dragging = false
+        if (!playback.connected) return@LaunchedEffect
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 position = readPosition()
@@ -230,7 +296,7 @@ private fun SeekBar(playback: PlaybackState, readPosition: () -> Long, onSeek: (
                 dragging = false
             }
         },
-        enabled = playback.canSeek && playback.durationMs > 0,
+        enabled = playback.connected && playback.canSeek && playback.durationMs > 0,
         modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Playback position" },
     )
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -259,20 +325,21 @@ internal fun GlyphButton(
 }
 
 @Composable
-internal fun PlayButton(playing: Boolean, onClick: () -> Unit, size: Dp) {
+internal fun PlayButton(playing: Boolean, onClick: () -> Unit, size: Dp, enabled: Boolean = true) {
     val colors = MaterialTheme.colorScheme
     Surface(
         onClick = onClick,
+        enabled = enabled,
         modifier = Modifier.size(size).semantics {
             contentDescription = if (playing) "Pause" else "Play"
             role = Role.Button
         },
         shape = CircleShape,
-        color = colors.primary,
+        color = if (enabled) colors.primary else colors.surfaceVariant,
         contentColor = colors.onPrimary,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Glyph(if (playing) Symbol.Pause else Symbol.Play, colors.onPrimary, Modifier.size(size * 0.43f))
+            Glyph(if (playing) Symbol.Pause else Symbol.Play, if (enabled) colors.onPrimary else colors.onSurfaceVariant, Modifier.size(size * 0.43f))
         }
     }
 }

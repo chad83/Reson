@@ -75,6 +75,7 @@ data class PlaybackState(
     val canGoNext: Boolean = false,
     val canGoPrevious: Boolean = false,
     val error: String? = null,
+    val nasProblem: NasProblem? = null,
 ) {
     val repeatLabel: String get() = when (repeatMode) {
         Player.REPEAT_MODE_ALL -> "Repeat all"
@@ -163,9 +164,13 @@ internal class PlayerViewModel(
         }
     }
 
+    fun reloadLibraryIndex() {
+        refresh.update { it + 1 }
+    }
+
     fun refreshLibrary() {
         if (nasRefresh?.isActive == true) return
-        refresh.update { it + 1 }
+        reloadLibraryIndex()
         if (permission.value) musicLibrary.refreshDevice()
         nasRefresh = viewModelScope.launch {
             _library.update { it.copy(nasScanning = true, nasError = null) }
@@ -192,7 +197,7 @@ internal class PlayerViewModel(
 
     fun connect() {
         if (controller != null || connection != null) return
-        _playback.value = PlaybackState()
+        _playback.update { it.copy(connectionFailed = false) }
         val token = SessionToken(appContext, ComponentName(appContext, PlaybackService::class.java))
         val future = MediaController.Builder(appContext, token)
             .setListener(object : MediaController.Listener {
@@ -201,8 +206,9 @@ internal class PlayerViewModel(
                     disconnected.removeListener(playerListener)
                     controller = null
                     connection = null
-                    _queue.value = emptyList()
-                    _playback.value = PlaybackState(connectionFailed = true)
+                    _playback.update {
+                        it.copy(connected = false, connectionFailed = true, playing = false, buffering = false)
+                    }
                 }
             })
             .buildAsync()
@@ -212,7 +218,7 @@ internal class PlayerViewModel(
                 val result = runCatching { future.get() }.getOrNull()
                 if (result == null) {
                     connection = null
-                    _playback.value = PlaybackState(connectionFailed = true)
+                    _playback.update { it.copy(connectionFailed = true) }
                 } else {
                     controller = result
                     result.addListener(playerListener)
@@ -307,8 +313,24 @@ internal class PlayerViewModel(
         player.play()
     }
 
-    fun removeQueued(id: String) = withQueueItem(id) { player, index ->
-        player.removeMediaItem(index)
+    fun removeQueued(id: String): (() -> Unit)? {
+        var undo: (() -> Unit)? = null
+        withQueueItem(id) { player, index ->
+            if (!player.isCommandAvailable(Player.COMMAND_CHANGE_MEDIA_ITEMS)) return@withQueueItem
+            val track = player.getMediaItemAt(index).toTrack()
+            val nextId = (index + 1).takeIf { it < player.mediaItemCount }
+                ?.let { player.getMediaItemAt(it).queueId(it) }
+            player.removeMediaItem(index)
+            undo = {
+                if (controller === player && player.isCommandAvailable(Player.COMMAND_CHANGE_MEDIA_ITEMS)) {
+                    val destination = (0 until player.mediaItemCount).firstOrNull {
+                        player.getMediaItemAt(it).queueId(it) == nextId
+                    } ?: index.coerceAtMost(player.mediaItemCount)
+                    player.addMediaItem(destination, track.toMediaItem())
+                }
+            }
+        }
+        return undo
     }
 
     fun moveQueued(id: String, offset: Int) = withQueueItem(id) { player, index ->
@@ -376,11 +398,12 @@ internal class PlayerViewModel(
         val item = player.currentMediaItem
         val track = item?.toTrack(metadata, player.duration)
         val mediaId = track?.uri
-        val error = player.playerError?.let {
-            val causes = generateSequence<Throwable>(it) { cause -> cause.cause }.take(16)
-            causes.mapNotNull { cause ->
+        val nasProblem = generateSequence<Throwable>(player.playerError) { cause -> cause.cause }.take(16)
+            .firstNotNullOfOrNull { cause ->
                 NasProblem.entries.firstOrNull { problem -> problem.description == cause.message }
-            }.firstOrNull()?.description ?: when {
+            }
+        val error = player.playerError?.let {
+            nasProblem?.description ?: when {
                 mediaId?.startsWith("${NasTrackUri.SCHEME}://") == true ->
                     "Couldn’t play this NAS track. Check the connection and tap Play to retry."
                 mediaId?.startsWith("${OfflineTrackUri.SCHEME}://") == true ->
@@ -408,6 +431,7 @@ internal class PlayerViewModel(
             canGoNext = player.hasNextMediaItem(),
             canGoPrevious = player.isCurrentMediaItemSeekable || player.hasPreviousMediaItem(),
             error = error,
+            nasProblem = nasProblem,
         )
     }
 

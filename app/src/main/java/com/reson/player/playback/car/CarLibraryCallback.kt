@@ -19,6 +19,7 @@ import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -65,7 +66,32 @@ internal class CarLibraryCallback(
         session: MediaSession,
         controller: MediaSession.ControllerInfo,
     ): ListenableFuture<MediaSession.ConnectionResult> {
-        if (!canBrowse(controller)) return Futures.immediateFuture(MediaSession.ConnectionResult.reject())
+        val browserAllowed = canBrowse(controller)
+        val isLegacyController =
+            controller.controllerVersion == MediaSession.ControllerInfo.LEGACY_CONTROLLER_VERSION
+        val isBluetoothService =
+            !controller.isTrusted && controller.packageName == "com.android.bluetooth" && browserAllowed
+        // A watch companion can already hold the platform session token without having library access.
+        if ((!browserAllowed && isLegacyController) || isBluetoothService) {
+            val commands = Player.Commands.Builder()
+                .add(Player.COMMAND_GET_CURRENT_MEDIA_ITEM)
+                .add(Player.COMMAND_GET_METADATA)
+                .add(Player.COMMAND_PREPARE)
+                .add(Player.COMMAND_PLAY_PAUSE)
+                .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_NEXT)
+                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .build()
+            return Futures.immediateFuture(
+                MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
+                    .setAvailableSessionCommands(SessionCommands.EMPTY)
+                    .setAvailablePlayerCommands(commands)
+                    .build(),
+            )
+        }
+        if (!browserAllowed) return Futures.immediateFuture(MediaSession.ConnectionResult.reject())
         val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
         val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
         if (!isLocal(controller)) playerCommands.remove(Player.COMMAND_CHANGE_MEDIA_ITEMS)
@@ -301,14 +327,17 @@ internal class CarLibraryCallback(
     private fun canBrowse(controller: MediaSession.ControllerInfo): Boolean {
         if (isLocal(controller) || controller.isTrusted) return true
         // Some car hosts are installed as system apps without the platform media-control grant.
-        return try {
+        return isSystemApp(controller)
+    }
+
+    private fun isSystemApp(controller: MediaSession.ControllerInfo): Boolean =
+        try {
             val info = app.packageManager.getApplicationInfo(controller.packageName, 0)
             info.uid == controller.uid &&
                 info.flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
         } catch (_: PackageManager.NameNotFoundException) {
             false
         }
-    }
 
     private fun <T : Any> denied(): ListenableFuture<LibraryResult<T>> =
         Futures.immediateFuture(LibraryResult.ofError<T>(SessionError.ERROR_PERMISSION_DENIED))

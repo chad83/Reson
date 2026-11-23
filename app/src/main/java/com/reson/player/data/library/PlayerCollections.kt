@@ -8,6 +8,7 @@ import com.reson.player.domain.TrackIdentity
 import com.reson.player.domain.LibraryView
 import com.reson.player.domain.grouped
 import java.util.UUID
+import java.util.concurrent.Callable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -52,18 +53,20 @@ internal class PlayerCollections(private val library: MusicLibrary, private val 
     }
 
     suspend fun snapshot(createSmartLists: Boolean = true): CollectionSnapshot = withContext(io) {
-        val entries = dao.entries().groupBy { it.playlistId }
-        val favourites = entries[FAVOURITES].orEmpty().map { it.track.toTrack() }
-        val history = dao.history().map { PlaybackVisit(it.id, it.playedAt, it.track.toTrack()) }
-        val smart = if (createSmartLists) smartPlaylists(favourites, history, library.tracks(canReadDevice()),
-            System.currentTimeMillis()) else emptyList()
-        CollectionSnapshot(
-            playlists = dao.playlists().filterNot { it.id == FAVOURITES }.map { list ->
-                SavedPlaylist(list.id, list.title, entries[list.id].orEmpty().map { it.track.toTrack() })
-            } + smart,
-            favourites = favourites,
-            history = history,
-        )
+        val saved = database.runInTransaction(Callable {
+            val entries = dao.entries().groupBy { it.playlistId }
+            CollectionSnapshot(
+                playlists = dao.playlists().filterNot { it.id == FAVOURITES }.map { list ->
+                    SavedPlaylist(list.id, list.title, entries[list.id].orEmpty().map { it.track.toTrack() })
+                },
+                favourites = entries[FAVOURITES].orEmpty().map { it.track.toTrack() },
+                history = dao.history().map { PlaybackVisit(it.id, it.playedAt, it.track.toTrack()) },
+            )
+        })
+        if (!createSmartLists) return@withContext saved
+        val smart = smartPlaylists(saved.favourites, saved.history, library.tracks(canReadDevice()),
+            System.currentTimeMillis())
+        saved.copy(playlists = saved.playlists + smart)
     }
 
     suspend fun create(title: String, track: Track? = null) = edit {
@@ -90,8 +93,24 @@ internal class PlayerCollections(private val library: MusicLibrary, private val 
         if (dao.hasPlaylist(id)) insertTrack(id, track)
     }
 
-    suspend fun remove(id: String, track: TrackIdentity) = edit {
+    suspend fun remove(id: String, track: TrackIdentity): CollectionTables.Entry? = edit {
+        val entries = dao.entries(id)
+        val index = entries.indexOfFirst { it.track.uri == track.uri && it.track.source == track.source }
+        if (index < 0) return@edit null
         dao.deleteEntry(id, track.uri, track.source)
+        entries[index]
+    }
+
+    suspend fun restore(entry: CollectionTables.Entry) = edit {
+        if (!dao.hasPlaylist(entry.playlistId)) return@edit
+        val entries = dao.entries(entry.playlistId)
+        if (entries.any { it.track.uri == entry.track.uri && it.track.source == entry.track.source }) return@edit
+        val index = entries.indexOfFirst { it.position >= entry.position }.takeIf { it >= 0 } ?: entries.size
+        val ordered = entries.toMutableList().apply { add(index, entry) }
+        dao.insertEntry(entry)
+        ordered.forEachIndexed { position, item ->
+            dao.moveEntry(entry.playlistId, item.track.uri, item.track.source, position.toLong())
+        }
     }
 
     suspend fun setFavourite(track: Track, favourite: Boolean) = edit {
@@ -107,10 +126,13 @@ internal class PlayerCollections(private val library: MusicLibrary, private val 
         val entries = dao.entries(id)
         val from = entries.indexOfFirst { it.track.uri == track.uri && it.track.source == track.source }
         if (from < 0) return@edit
-        val entry = entries[from]
-        val adjacent = entries.getOrNull(from + offset) ?: return@edit
-        dao.moveEntry(id, track.uri, track.source, adjacent.position)
-        dao.moveEntry(id, adjacent.track.uri, adjacent.track.source, entry.position)
+        val to = from + offset
+        if (to !in entries.indices || to == from) return@edit
+        val ordered = entries.toMutableList().apply { add(to, removeAt(from)) }
+        for (index in minOf(from, to)..maxOf(from, to)) {
+            val item = ordered[index]
+            dao.moveEntry(id, item.track.uri, item.track.source, entries[index].position)
+        }
     }
 
     fun recordPlayback(track: Track, playedAt: Long) {
@@ -131,11 +153,12 @@ internal class PlayerCollections(private val library: MusicLibrary, private val 
 
     suspend fun clearHistory() = edit(listsChanged = false) { dao.clearHistory() }
 
-    private suspend fun edit(listsChanged: Boolean = true, change: () -> Unit) = withContext(io) {
-        database.runInTransaction(change)
+    private suspend fun <T> edit(listsChanged: Boolean = true, change: () -> T): T = withContext(io) {
+        val result = database.runInTransaction(Callable { change() })
         revisions.update { it + 1 }
         if (listsChanged) listRevisions.update { it + 1 }
         else historyRevisions.update { it + 1 }
+        result
     }
 
     private fun insertPlaylist(id: String, title: String) {

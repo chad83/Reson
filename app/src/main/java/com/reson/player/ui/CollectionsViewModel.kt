@@ -33,13 +33,14 @@ internal class CollectionsViewModel(
     private val downloads: PlaylistDownloads,
 ) : ViewModel() {
     private val _state = MutableStateFlow(CollectionsState())
+    private val refreshes = MutableStateFlow(0L)
     val state = _state.asStateFlow()
     val offlinePlaylists = downloads.enabled
     val offlineFailures = downloads.failures
 
     init {
         viewModelScope.launch {
-            combine(collections.changes, collections.smartChanges) { _, _ -> Unit }.collectLatest {
+            combine(collections.changes, collections.smartChanges, refreshes) { _, _, _ -> Unit }.collectLatest {
                 try {
                     val snapshot = collections.snapshot()
                     _state.update { it.copy(data = snapshot, loading = false, readError = false) }
@@ -53,6 +54,10 @@ internal class CollectionsViewModel(
         edit("Couldn’t restore offline playlist sync.") { downloads.sync(replace = false) }
     }
 
+    fun refresh() {
+        refreshes.update { it + 1 }
+    }
+
     fun create(title: String, track: Track? = null) = edit { collections.create(title, track) }
     fun rename(id: String, title: String) = edit { collections.rename(id, title) }
     fun delete(id: String) = edit {
@@ -60,7 +65,11 @@ internal class CollectionsViewModel(
         if (id in offlinePlaylists.value) downloads.setEnabled(id, false)
     }
     fun add(id: String, track: Track) = edit { collections.add(id, track) }
-    fun remove(id: String, track: TrackIdentity) = edit { collections.remove(id, track) }
+    fun remove(id: String, track: TrackIdentity, onRemoved: (() -> Unit) -> Unit) = edit {
+        collections.remove(id, track)?.let { entry ->
+            onRemoved({ edit { collections.restore(entry) } })
+        }
+    }
     fun move(id: String, track: TrackIdentity, offset: Int) = edit { collections.move(id, track, offset) }
     fun setFavourite(track: Track, favourite: Boolean) = edit { collections.setFavourite(track, favourite) }
     fun clearHistory() = edit { collections.clearHistory() }

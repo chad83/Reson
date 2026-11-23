@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -42,8 +41,6 @@ import com.reson.player.domain.Track
 internal fun OfflineScreen(
     offline: OfflineUiState,
     playback: PlaybackState,
-    onBack: () -> Unit,
-    onLibrary: () -> Unit,
     onBrowseNas: () -> Unit,
     onPlay: (List<Track>, String) -> Unit,
     trackMenu: @Composable (Track) -> Unit,
@@ -54,8 +51,6 @@ internal fun OfflineScreen(
     onPreviewCleanup: () -> Unit,
     onDismissCleanup: () -> Unit,
     onCleanup: (Set<String>) -> Unit,
-    onOpenPlayer: () -> Unit,
-    onTogglePlayback: () -> Unit,
     onReconnectPlayback: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -64,24 +59,16 @@ internal fun OfflineScreen(
     val folders = offline.data.tasks.filter { it.folder }
     val requests = offline.data.tasks.filterNot { it.folder }
     var removeId by rememberSaveable { mutableStateOf<String?>(null) }
-    Scaffold(bottomBar = {
-        if (playback.mediaId != null) {
-            Box(Modifier.fillMaxWidth().navigationBarsPadding(), contentAlignment = Alignment.Center) {
-                MiniPlayer(playback, onOpenPlayer, onTogglePlayback)
-            }
-        }
-    }) { insets ->
+    Scaffold { insets ->
         Box(Modifier.fillMaxSize().padding(insets), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.widthIn(max = 760.dp).fillMaxSize()) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    GlyphButton("Back", Symbol.Back, onBack)
                     Text("Downloads", Modifier.weight(1f).padding(horizontal = 8.dp),
                         style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     TextButton(onClick = onBrowseNas) { Text("Browse NAS") }
-                    TextButton(onClick = onLibrary) { Text("Library") }
                 }
                 if (offline.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                 LazyColumn(

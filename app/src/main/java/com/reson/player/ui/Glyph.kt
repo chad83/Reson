@@ -12,7 +12,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 
-internal enum class Symbol { Wave, Note, Play, Pause, Previous, Next, Refresh, Down, Phone, Back, Folder, Nas, More, Settings }
+internal enum class Symbol { Wave, Note, Play, Pause, Previous, Next, Refresh, Down, Phone, Back, Folder, Nas, More, Settings, Drag }
 
 @Composable
 internal fun Glyph(symbol: Symbol, color: Color, modifier: Modifier = Modifier) {
@@ -104,6 +104,10 @@ internal fun Glyph(symbol: Symbol, color: Color, modifier: Modifier = Modifier) 
                 line(9f, 4f, 9f, 8f, 3f)
                 line(15f, 10f, 15f, 14f, 3f)
                 line(8f, 16f, 8f, 20f, 3f)
+            }
+            Symbol.Drag -> {
+                line(4f, 9f, 20f, 9f)
+                line(4f, 15f, 20f, 15f)
             }
             Symbol.More -> {
                 for (y in listOf(6f, 12f, 18f)) drawCircle(color, 1.35f * unit, point(12f, y))

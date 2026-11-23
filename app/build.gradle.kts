@@ -11,8 +11,14 @@ android {
         applicationId = "com.reson.player"
         minSdk = 29
         targetSdk = 37
-        versionCode = 12
-        versionName = "0.7.2"
+        versionCode = 15
+        versionName = "0.7.5"
+    }
+
+    providers.gradleProperty("resonDebugKeystore").orNull?.let { path ->
+        val keystore = file(path)
+        require(keystore.isFile) { "Reson debug keystore does not exist: ${keystore.path}" }
+        signingConfigs.getByName("debug").storeFile = keystore
     }
 
     buildTypes {

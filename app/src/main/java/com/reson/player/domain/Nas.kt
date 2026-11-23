@@ -111,6 +111,10 @@ enum class NasProblem(val description: String) {
     SavedConnection("Couldn’t read or update the saved connection. Try entering it again."),
 }
 
+internal val NasProblem.isConnectionFailure: Boolean
+    get() = this == NasProblem.Unreachable || this == NasProblem.Unresolved ||
+        this == NasProblem.Authentication || this == NasProblem.SocketBlocked
+
 class NasException(val problem: NasProblem, cause: Throwable? = null) : IOException(problem.description, cause)
 
 object NasPaths {

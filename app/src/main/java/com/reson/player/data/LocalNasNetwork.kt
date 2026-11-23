@@ -19,11 +19,27 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.NetworkInterface
 import java.net.UnknownHostException
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 class LocalNasNetwork(private val context: Context) {
     private val manager = context.getSystemService(ConnectivityManager::class.java)
 
     data class Endpoint(val network: Network, val address: InetAddress, val port: Int)
+
+    internal val availability = callbackFlow {
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { trySend(localNetworks().isNotEmpty()) }
+            override fun onLost(network: Network) { trySend(localNetworks().isNotEmpty()) }
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                trySend(localNetworks().isNotEmpty())
+            }
+        }
+        watchLocalNetwork(callback)
+        trySend(localNetworks().isNotEmpty())
+        awaitClose { unwatchLocalNetwork(callback) }
+    }.distinctUntilChanged()
 
     fun hasPermission(): Boolean = Build.VERSION.SDK_INT < 37 ||
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_LOCAL_NETWORK) ==

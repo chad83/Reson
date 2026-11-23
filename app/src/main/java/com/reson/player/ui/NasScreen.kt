@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -53,14 +52,12 @@ internal fun NasScreen(
     playback: PlaybackState,
     offline: OfflineUiState,
     offlineModel: OfflineViewModel,
+    hasLan: Boolean,
     onBack: () -> Unit,
-    onLibrary: () -> Unit,
     onGrantNetwork: () -> Unit,
     onPlay: (NasPage.Folder, NasEntry) -> Unit,
     onImportPlaylist: (NasPage.Folder, NasEntry) -> Unit,
     trackMenu: @Composable (NasPage.Folder, NasEntry) -> Unit,
-    onOpenPlayer: () -> Unit,
-    onTogglePlayback: () -> Unit,
     onReconnectPlayback: () -> Unit,
 ) {
     val state by model.state.collectAsStateWithLifecycle()
@@ -68,13 +65,7 @@ internal fun NasScreen(
     val back = { if (!model.back()) onBack() }
     BackHandler(onBack = back)
 
-    Scaffold(bottomBar = {
-        if (playback.mediaId != null) {
-            Box(Modifier.fillMaxWidth().navigationBarsPadding(), contentAlignment = Alignment.Center) {
-                MiniPlayer(playback, onOpenPlayer, onTogglePlayback)
-            }
-        }
-    }) { insets ->
+    Scaffold { insets ->
         Box(Modifier.fillMaxSize().padding(insets), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.widthIn(max = 760.dp).fillMaxSize()) {
                 Row(
@@ -97,7 +88,6 @@ internal fun NasScreen(
                         GlyphButton("Refresh folder", Symbol.Refresh, { model.browse(page.profile, page.path) },
                             enabled = !state.busy && state.hasPermission)
                     }
-                    TextButton(onClick = onLibrary) { Text("Library") }
                 }
                 if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (!state.hasPermission) {
@@ -119,7 +109,7 @@ internal fun NasScreen(
                     )
                 }
                 when (page) {
-                    NasPage.Connections -> NasConnections(model, state)
+                    NasPage.Connections -> NasConnections(model, state, hasLan)
                     is NasPage.Editor -> NasEditor(model, state, page)
                     is NasPage.Folder -> key(page.profile.id, page.path) {
                         NasFolder(model, state, page, playback, offline, offlineModel, onPlay, onImportPlaylist,
@@ -132,14 +122,14 @@ internal fun NasScreen(
 }
 
 @Composable
-private fun NasConnections(model: NasViewModel, state: NasUiState) {
+private fun NasConnections(model: NasViewModel, state: NasUiState, hasLan: Boolean) {
     LazyColumn(
         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = { model.add() }, enabled = !state.busy) { Text("Add NAS") }
+                Button(onClick = { model.add() }, enabled = !state.busy) { Text("Enter NAS address") }
                 OutlinedButton(onClick = model::discover, enabled = !state.busy && state.hasPermission) {
                     Text("Find on network")
                 }
@@ -155,7 +145,12 @@ private fun NasConnections(model: NasViewModel, state: NasUiState) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 NasRow(
                     title = profile.name,
-                    subtitle = "${profile.host} · ${profile.share}",
+                    subtitle = when {
+                        !state.hasPermission -> "Local network access required"
+                        !hasLan -> "No Wi-Fi or Ethernet connection"
+                        profile.id in state.unavailableProfiles -> "Unavailable · Tap to retry"
+                        else -> "${profile.host} · ${profile.share}"
+                    },
                     symbol = Symbol.Nas,
                     enabled = !state.busy && state.hasPermission,
                     onClick = { model.browse(profile) },
@@ -205,6 +200,8 @@ private fun NasEditor(model: NasViewModel, state: NasUiState, editor: NasPage.Ed
             NasField("Domain (optional)", draft.domain, { model.updateDraft(draft.copy(domain = it)) }, enabled)
         }
         item {
+            Text("Choose a share from Browse shares or enter its name.",
+                style = MaterialTheme.typography.bodyMedium)
             NasField("Share name", draft.share, { model.updateDraft(draft.copy(share = it)) }, enabled)
         }
         item {
@@ -218,7 +215,7 @@ private fun NasEditor(model: NasViewModel, state: NasUiState, editor: NasPage.Ed
         }
         item {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = { model.save(draft) }, enabled = enabled) { Text("Save connection") }
+                Button(onClick = { model.save(draft) }, enabled = enabled) { Text("Save and browse folders") }
                 if (draft.original != null) {
                     TextButton(onClick = { confirmRemove = true }, enabled = enabled) { Text("Remove connection") }
                 }
@@ -298,6 +295,10 @@ private fun NasFolder(
                         style = MaterialTheme.typography.bodySmall)
                 }
                 if (page.entries != null) {
+                    if (page.libraryFolders.isEmpty()) {
+                        Text("Open your music folder, then add it to the library.",
+                            style = MaterialTheme.typography.bodyMedium)
+                    }
                     FlowRow {
                         TextButton(onClick = { model.scanLibraryFolder(page) },
                             enabled = !state.busy && state.hasPermission && page.path !in page.libraryFolders) {

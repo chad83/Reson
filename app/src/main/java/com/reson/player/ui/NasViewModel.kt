@@ -14,6 +14,7 @@ import com.reson.player.domain.NasException
 import com.reson.player.domain.NasLogin
 import com.reson.player.domain.NasPaths
 import com.reson.player.domain.NasProblem
+import com.reson.player.domain.isConnectionFailure
 import com.reson.player.domain.NasProfile
 import com.reson.player.domain.NasProfiles
 import kotlinx.coroutines.CancellationException
@@ -88,6 +89,7 @@ internal data class NasUiState(
     val page: NasPage = NasPage.Connections,
     val profiles: List<NasProfile> = emptyList(),
     val devices: List<NasDevice> = emptyList(),
+    val unavailableProfiles: Set<String> = emptySet(),
     val hasPermission: Boolean = false,
     val busy: Boolean = false,
     val message: String? = null,
@@ -164,26 +166,48 @@ internal class NasViewModel(
     fun save(draft: NasDraft) = work {
         val login = draft.login(requireShare = true)
         library.saveProfile(login)
+        val profile = login.profile
         _state.update { state ->
-            state.copy(page = NasPage.Connections, profiles = state.profiles.withProfile(login.profile))
+            state.copy(profiles = state.profiles.withProfile(profile), page = NasPage.Folder(profile, profile.folder))
         }
+        loadFolder(profile, profile.folder)
     }
 
     fun remove(profile: NasProfile) = work {
         library.removeProfile(profile.id)
         _state.update { state ->
-            state.copy(page = NasPage.Connections, profiles = state.profiles.filterNot { it.id == profile.id })
+            state.copy(page = NasPage.Connections, profiles = state.profiles.filterNot { it.id == profile.id },
+                unavailableProfiles = state.unavailableProfiles - profile.id)
         }
     }
 
     fun browse(profile: NasProfile, path: List<String> = profile.folder) {
         navigate(NasPage.Folder(profile, path))
-        work {
-            val folder = NasPage.Folder(profile, path, libraryFolders = library.nasFolders(profile))
-            _state.update { it.copy(page = folder) }
-            val entries = runInterruptible(Dispatchers.IO) { client.browse(profiles.login(profile.id), path) }
-            _state.update { it.copy(page = folder.copy(entries = entries)) }
+        work { loadFolder(profile, path) }
+    }
+
+    private suspend fun loadFolder(profile: NasProfile, path: List<String>) {
+        val folder = NasPage.Folder(profile, path, libraryFolders = library.nasFolders(profile))
+        _state.update { it.copy(page = folder) }
+        val entries = try {
+            runInterruptible(Dispatchers.IO) { client.browse(profiles.login(profile.id), path) }
+        } catch (error: NasException) {
+            if (error.problem.isConnectionFailure) setUnavailable(profile.id, true)
+            throw error
         }
+        _state.update {
+            it.copy(page = folder.copy(entries = entries), unavailableProfiles = it.unavailableProfiles - profile.id)
+        }
+    }
+
+    fun setUnavailable(id: String, unavailable: Boolean) {
+        _state.update {
+            it.copy(unavailableProfiles = if (unavailable) it.unavailableProfiles + id else it.unavailableProfiles - id)
+        }
+    }
+
+    fun clearUnavailableProfiles() {
+        _state.update { it.copy(unavailableProfiles = emptySet()) }
     }
 
     fun scanLibraryFolder(folder: NasPage.Folder) = work("Couldn’t update the music library.") {

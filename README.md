@@ -13,6 +13,16 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Use `gradlew.bat` on Windows. For `adb install`, enable USB debugging on your phone, connect it by USB, and accept the debugging prompt.
 
+### Upgrade an existing installation
+
+Install the APK over the existing copy of Reson. Use the same application ID and signing certificate, and a version code at least as high as the installed APK. `adb install -r` keeps the app’s data, including playlists and downloaded tracks. Uninstalling or clearing app storage removes that data. [Android update requirements](https://developer.android.com/google/play/app-updates)
+
+Gradle normally uses a different debug key on each development machine. To update a debug APK from another machine, use the original debug keystore with `./gradlew :app:assembleDebug -PresonDebugKeystore=/path/to/debug.keystore`. Keep the keystore outside the repository. If Android reports a signature mismatch, rebuild with the original key before trying again. [Android app signing](https://developer.android.com/studio/publish/app-signing)
+
+### Build for Google Play
+
+Run `./gradlew :app:testDebugUnitTest :app:lintRelease :app:bundleRelease` to check the app and build the release bundle. Use Android Studio’s **Generate Signed Bundle / APK** to sign a release Android App Bundle with the dedicated Play upload key. Upload that signed `.aab` to the Internal testing track. Keep the upload key and its password outside the repository, and increment `versionCode` for each new Play upload. [Play App Signing](https://developer.android.com/studio/publish/app-signing)
+
 ## Connect to a Synology NAS
 
 1. On the NAS, enable **SMB service** in DSM under **Control Panel → File Services → SMB**. Use SMB2 or SMB3 and give a NAS account read access to the music share. [Synology SMB setup](https://kb.synology.com/en-us/DSM/tutorial/access_nas_from_mac)
@@ -33,17 +43,17 @@ If Android reports a blocked network connection immediately after updating from 
 ## Listen offline
 
 1. In a NAS folder, tap **Download** beside a track. The same action is available in **Now playing** for a NAS track.
-2. To keep a whole folder offline, tap **Keep folder offline** and confirm. Reson downloads audio in the folder and its subfolders, then checks for additions and changes about every 12 hours when Android can run the job on Wi-Fi or Ethernet. Use **Offline → Sync now** to request an earlier check. If the NAS is unreachable, Reson retries up to twice, then waits for the next scheduled check or a manual retry. Reson keeps 128 MiB of free space in reserve and pauses a download if there is insufficient room. Cancel a transfer or stop syncing its folder to remove any unfinished copy.
-3. Open **Offline** from the Library to play saved tracks, retry or cancel transfers, stop syncing a folder, or remove a copy. Downloaded tracks also appear in the Library. Playing a NAS track uses its saved copy when available.
-4. Stopping sync or deleting the source file from the NAS leaves the saved copy available. To free space, remove the copy from **Offline**. A track still in an actively synced folder can be downloaded again.
-5. In a playlist’s menu, choose **Keep playlist offline** to download its NAS tracks. Rows show waiting, downloading, and saved tracks. For a failed track, open its menu and choose **Retry download**. Stopping sync or removing a track from the playlist keeps its saved copy available in **Offline**.
+2. To keep a whole folder offline, tap **Keep folder offline** and confirm. Reson downloads audio in the folder and its subfolders, then checks for additions and changes about every 12 hours when Android can run the job on Wi-Fi or Ethernet. Use **Downloads → Sync now** to request an earlier check. If the NAS is unreachable, Reson retries up to twice, then waits for the next scheduled check or a manual retry. Reson keeps 128 MiB of free space in reserve and pauses a download if there is insufficient room. Cancel a transfer or stop syncing its folder to remove any unfinished copy.
+3. Open **Downloads** to play saved tracks, retry or cancel transfers, stop syncing a folder, or remove a copy. Downloaded tracks also appear in the Library. Playing a NAS track uses its saved copy when available.
+4. Stopping sync or deleting the source file from the NAS leaves the saved copy available. To free space, remove the copy from **Downloads**. A track still in an actively synced folder can be downloaded again.
+5. In a playlist’s menu, choose **Keep playlist offline** to download its NAS tracks. Rows show waiting, downloading, and saved tracks. For a failed track, open its menu and choose **Retry download**. Stopping sync or removing a track from the playlist keeps its saved copy available in **Downloads**.
 6. The download bar shows progress while you browse or play music. Tap it to open **Downloads**. **Review cleanup** shows how much space you can reclaim from copies outside active syncs. Manually downloaded copies and copies saved before this feature are protected from cleanup.
 
 ## Use the player and collections
 
 - Open a track’s menu to choose **Play next**, add it to the end of the queue, mark it as a favourite, or add it to a playlist. You can create a playlist from that menu.
-- Open **Library → Collections** to manage playlists and favourites or revisit playback history. Playlist menus let you reorder or remove tracks and rename or delete the playlist. Use **Shuffle play** to start a playlist or your favourites in shuffled order.
-- In **Now playing**, toggle shuffle or tap repeat to cycle through off, all tracks, and one track. Open **Queue** to jump to a track, remove it, or move it up or down. Turn off shuffle to change the manual order. **Settings → Resume last queue** restores the queue and position when you reopen Reson. The restored queue opens paused.
+- Open **Playlists** to manage playlists and favourites or revisit playback history. Playlist handles let you drag tracks into order. Track menus also let you reorder or remove tracks and rename or delete the playlist. Use **Shuffle play** to start a playlist or your favourites in shuffled order.
+- In **Now playing**, toggle shuffle or tap repeat to cycle through off, all tracks, and one track. Open **Queue** to jump to a track, remove it, or drag it into a different position. The track menu also offers Move up and Move down. Turn off shuffle to change the manual order. **Settings → Resume last queue** restores the queue and position when you reopen Reson. The restored queue opens paused.
 - The **Playlists** menu imports M3U and M3U8 documents. To import a playlist stored on your NAS, tap it in the NAS browser. Relative paths in that playlist resolve from its NAS folder. An individual playlist’s menu exports it as M3U or M3U8 with references to the original audio files.
 - **Smart playlists** include favourites absent from recent playback history and albums added in the last 30 days. Reson starts tracking library addition dates with this version. Use a smart playlist’s menu to keep its NAS tracks offline.
 - **Settings → ReplayGain** offers **Off**, **Track**, and **Album**. Track mode balances tagged tracks individually. Album mode uses the album’s gain when it is available. ReplayGain applies to playback on the phone, including audio routed to Bluetooth.
@@ -100,15 +110,16 @@ To check the library, choose **Add folder to library** in two folders on the sam
 
 ### Offline integration test
 
-Download a tagged NAS track, enable sync on a folder containing nested audio, and wait for the tracks to appear under **Saved tracks**. Disconnect Wi-Fi and verify playback and seeking from **Offline** and from the Library. Reconnect, then add, replace, and delete source files on the test share. Use **Sync now** and check that new and updated tracks arrive and the deleted source still has a playable copy. Interrupt a larger transfer, restore Wi-Fi, and verify it completes before it appears under **Saved tracks**.
+Download a tagged NAS track, enable sync on a folder containing nested audio, and wait for the tracks to appear under **Saved tracks**. Disconnect Wi-Fi and verify playback and seeking from **Downloads** and from the Library. Reconnect, then add, replace, and delete source files on the test share. Use **Sync now** and check that new and updated tracks arrive and the deleted source still has a playable copy. Interrupt a larger transfer, restore Wi-Fi, and verify it completes before it appears under **Saved tracks**.
 
 While a large file is downloading, open the Library and start another track. Check that the download bar updates while you browse, and tap it to open **Downloads**. Keep a playlist containing an inaccessible NAS file offline, fix the share permission, then use **Retry download** on the failed track. Stop syncing the playlist and open **Review cleanup**. Confirm that an unrelated manual download and any copy shared with an active folder are excluded from the preview.
 
 ### Playback transition checks
 
-1. Upgrade an existing installation and check that saved NAS folders, playlists, and downloads remain available. Check that old downloads are protected in **Review cleanup**.
+1. On the previous APK, save a NAS folder, create a playlist, and download a track. Install the new APK with `adb install -r` over that installation. Check that the folder and playlist still appear and the download plays with Wi-Fi off. Check that previously protected downloads remain protected in **Review cleanup**.
 2. While shuffle is on, choose **Play next** from a track’s menu and check that it follows the current track. Try this on the phone and a Cast receiver. With a shuffled queue, cast to the receiver and back and compare the upcoming tracks.
 3. Reopen the app with Wi-Fi off after playing a NAS track. Check that the queue and position restore paused. Restore Wi-Fi and press **Play** to retry.
-4. Play two tracks with different ReplayGain tags. Compare Off, Track, and Album settings and include a track without tags to check that gain resets across the transition.
+4. Pause a playlist, leave Reson in Recents, and return after a long pause. Check that its list and queue are visible. Lock the phone and try play, pause, and skip from the Bluetooth watch.
+5. Play two tracks with different ReplayGain tags. Compare Off, Track, and Album settings and include a track without tags to check that gain resets across the transition.
 
 See [architecture](docs/ARCHITECTURE.md) and [roadmap](docs/ROADMAP.md).

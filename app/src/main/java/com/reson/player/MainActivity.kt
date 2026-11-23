@@ -111,6 +111,9 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         updatePermission()
+        model.connect()
+        model.reloadLibraryIndex()
+        collectionsModel.refresh()
     }
 
     private fun updatePermission() {

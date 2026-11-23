@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <queries>
+        <package android:name="com.android.bluetooth" />
         <package android:name="com.google.android.projection.gearhead" />
     </queries>
 

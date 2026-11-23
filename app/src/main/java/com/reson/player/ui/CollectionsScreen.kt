@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
@@ -53,16 +54,16 @@ internal fun CollectionsScreen(
     offlinePlaylists: Set<String>,
     playlistFailures: Map<TrackIdentity, String>,
     sourceByProfile: Map<String, String>,
+    canPlayTrack: (Track) -> Boolean,
+    nasStatus: String?,
     resolver: SavedTrackResolver,
     actions: TrackActions,
     playback: PlaybackState,
     loadArtwork: suspend (String, String) -> ByteArray?,
-    onBack: () -> Unit,
-    onLibrary: () -> Unit,
     onPlay: (List<Track>, String) -> Unit,
     onShufflePlay: (List<Track>) -> Unit,
-    onOpenPlayer: () -> Unit,
-    onTogglePlayback: () -> Unit,
+    onRemoved: (() -> Unit) -> Unit,
+    onReconnect: () -> Unit,
 ) {
     var tab by rememberSaveable { mutableStateOf(CollectionTab.Playlists) }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -89,16 +90,12 @@ internal fun CollectionsScreen(
         val name = playlist.title.replace('/', '_')
         if (utf8Extension) exportM3u8.launch("$name.m3u8") else exportM3u.launch("$name.m3u")
     }
-    val back = { if (playlist == null) onBack() else selectedId = null }
-    BackHandler(enabled = playlist != null) { selectedId = null }
+    val back: () -> Unit = { selectedId = null }
+    BackHandler(enabled = selectedId != null, onBack = back)
 
     PlayerListScreen(
-        title = playlist?.title ?: "Collections",
-        onBack = back,
-        onLibrary = onLibrary,
-        playback = playback,
-        onOpenPlayer = onOpenPlayer,
-        onTogglePlayback = onTogglePlayback,
+        title = playlist?.title ?: "Playlists",
+        onBack = back.takeIf { selectedId != null },
         actions = {
             when {
                 playlist != null -> ActionMenu("Playlist settings", buildList {
@@ -141,10 +138,16 @@ internal fun CollectionsScreen(
             Text(rule.description, Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if (playback.connectionFailed) {
+            TextButton(onClick = onReconnect, modifier = Modifier.padding(horizontal = 16.dp)) {
+                Text("Retry playback connection")
+            }
+        }
         if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (state.readError) {
             Text("Couldn’t read your collections.", Modifier.padding(24.dp), color = MaterialTheme.colorScheme.error)
-        } else if (!state.loading) {
+        }
+        if (!state.loading && (!state.readError || playlist != null)) {
             when {
                 playlist != null || tab == CollectionTab.Favourites -> SavedList(
                     saved = playlist?.tracks ?: state.data.favourites,
@@ -153,6 +156,8 @@ internal fun CollectionsScreen(
                     offline = offline,
                     playlistFailures = playlistFailures,
                     sourceByProfile = sourceByProfile,
+                    canPlayTrack = canPlayTrack,
+                    nasStatus = nasStatus,
                     model = model,
                     resolver = resolver,
                     actions = actions,
@@ -160,6 +165,7 @@ internal fun CollectionsScreen(
                     loadArtwork = loadArtwork,
                     onPlay = onPlay,
                     onShufflePlay = onShufflePlay,
+                    onRemoved = onRemoved,
                 )
                 tab == CollectionTab.Playlists -> Playlists(state.data.playlists) { selectedId = it }
                 else -> History(state.data, resolver, actions, playback, loadArtwork, onPlay)
@@ -244,6 +250,8 @@ private fun SavedList(
     offline: OfflineUiState,
     playlistFailures: Map<TrackIdentity, String>,
     sourceByProfile: Map<String, String>,
+    canPlayTrack: (Track) -> Boolean,
+    nasStatus: String?,
     model: CollectionsViewModel,
     resolver: SavedTrackResolver,
     actions: TrackActions,
@@ -251,6 +259,7 @@ private fun SavedList(
     loadArtwork: suspend (String, String) -> ByteArray?,
     onPlay: (List<Track>, String) -> Unit,
     onShufflePlay: (List<Track>) -> Unit,
+    onRemoved: (() -> Unit) -> Unit,
 ) {
     if (saved.isEmpty()) {
         EmptyCollection(when {
@@ -260,27 +269,39 @@ private fun SavedList(
         })
         return
     }
-    val playable = saved.map(resolver::resolve)
-    val order = playable.filterNotNull()
     val copies = remember(offline.data.copies) { offline.data.copies.mapTo(hashSetOf()) { it.track.identity } }
+    val playable = saved.map { track ->
+        resolver.resolve(track)?.takeIf { it.identity in copies || canPlayTrack(it) }
+    }
+    val order = playable.filterNotNull()
+    if (saved.any { NasTrackUri.accepts(it.originalUri.toUri()) } && nasStatus != null) {
+        Text(nasStatus, Modifier.padding(horizontal = 24.dp),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (order.size < saved.size) {
+            Text("${order.size} of ${saved.size} tracks available", Modifier.padding(horizontal = 24.dp),
+                style = MaterialTheme.typography.bodyMedium)
+        }
+    }
     val tasks = remember(offline.data.tasks) { offline.data.tasks.filterNot { it.folder }.associateBy { TrackIdentity(it.uri, it.source) } }
     FlowRow(Modifier.padding(horizontal = 20.dp)) {
         TextButton(enabled = playback.connected && order.isNotEmpty(), onClick = { onPlay(order, order.first().uri) }) {
-            Text("Play")
+            Text(if (order.size < saved.size) "Play available tracks" else "Play")
         }
         TextButton(enabled = playback.connected && order.isNotEmpty(), onClick = { onShufflePlay(order) }) {
             Text("Shuffle play")
         }
     }
-    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
-        itemsIndexed(saved, key = { _, track -> "${track.source}\u0000${track.originalUri}" }) { index, track ->
+    val listState = rememberLazyListState()
+    val editablePlaylist = playlist?.takeIf { it.rule == null }
+    LazyColumn(state = listState, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+        itemsIndexed(saved, key = { _, track -> savedTrackKey(track) }) { index, track ->
             val actual = playable[index]
             val display = actual ?: track
             val menu = actions.items(display, actual != null).toMutableList()
-            if (playlist != null && playlist.rule == null) {
-                menu += MenuAction("Move up", index > 0) { model.move(playlist.id, track.identity, -1) }
-                menu += MenuAction("Move down", index < saved.lastIndex) { model.move(playlist.id, track.identity, 1) }
-                menu += MenuAction("Remove from playlist") { model.remove(playlist.id, track.identity) }
+            if (editablePlaylist != null) {
+                menu += MenuAction("Move up", index > 0) { model.move(editablePlaylist.id, track.identity, -1) }
+                menu += MenuAction("Move down", index < saved.lastIndex) { model.move(editablePlaylist.id, track.identity, 1) }
+                menu += MenuAction("Remove from playlist") { model.remove(editablePlaylist.id, track.identity, onRemoved) }
             }
             val uri = track.originalUri.toUri()
             val task = tasks[track.identity]
@@ -302,10 +323,17 @@ private fun SavedList(
             if (playlist != null && error != null && !running) {
                 menu += MenuAction("Retry download") { model.retryOffline(playlist.id, track) }
             }
-            Column {
+            Column(Modifier.animateItem()) {
                 CollectionTrackRow(
                     display, actual != null, listOfNotNull(display.artist ?: "Unknown artist", status).joinToString(" · "),
                     playback, loadArtwork, menu,
+                    dragHandle = editablePlaylist?.takeIf { saved.size > 1 }?.let { list ->
+                        {
+                            ReorderHandle(listState, savedTrackKey(track)) { offset ->
+                                model.move(list.id, track.identity, offset)
+                            }
+                        }
+                    },
                 ) { actual?.let { onPlay(order, it.uri) } }
                 if (error != null) {
                     Text(error, Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
@@ -315,6 +343,8 @@ private fun SavedList(
         }
     }
 }
+
+private fun savedTrackKey(track: Track): String = "${track.source}\u0000${track.originalUri}"
 
 @Composable
 private fun History(
@@ -350,9 +380,11 @@ private fun CollectionTrackRow(
     playback: PlaybackState,
     loadArtwork: suspend (String, String) -> ByteArray?,
     actions: List<MenuAction>,
+    dragHandle: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
+        dragHandle?.invoke()
         LibraryRow(
             title = track.title,
             subtitle = if (available) subtitle else "$subtitle · Unavailable",

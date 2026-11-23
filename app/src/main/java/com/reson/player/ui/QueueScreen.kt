@@ -9,11 +9,11 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -30,6 +30,8 @@ import com.reson.player.domain.Track
 @Composable
 internal fun QueueScreen(
     items: List<QueueItem>,
+    restoring: Boolean,
+    onReconnect: () -> Unit,
     playback: PlaybackState,
     onBack: () -> Unit,
     onLibrary: () -> Unit,
@@ -40,21 +42,35 @@ internal fun QueueScreen(
     onRepeat: () -> Unit,
     loadArtwork: suspend (String, String) -> ByteArray?,
 ) {
+    val listState = rememberLazyListState()
     PlayerListScreen("Queue", onBack, onLibrary) {
         PlaybackModes(playback, onShuffle, onRepeat, Modifier.padding(horizontal = 20.dp))
-        if (items.isEmpty()) {
-            Text("The queue is empty.", Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else {
+        when {
+            playback.connectionFailed -> Row(
+                Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Couldn’t reconnect to playback.", Modifier.weight(1f))
+                TextButton(onClick = onReconnect) { Text("Retry") }
+            }
+            !playback.connected || restoring -> Text("Restoring queue…", Modifier.padding(24.dp))
+            items.isEmpty() -> Text("The queue is empty.", Modifier.padding(24.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (items.isNotEmpty()) {
             if (playback.shuffle && items.size > 1) {
                 Text("Turn off shuffle to reorder the queue.", Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.bodySmall)
             }
             LazyColumn(
                 modifier = Modifier.weight(1f),
+                state = listState,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.animateItem(), verticalAlignment = Alignment.CenterVertically) {
+                        if (playback.connected && !playback.shuffle && items.size > 1) {
+                            ReorderHandle(listState, item.id) { offset -> onMove(item.id, offset) }
+                        }
                         LibraryRow(
                             title = item.track.title,
                             subtitle = item.track.artist ?: "Unknown artist",
@@ -67,9 +83,9 @@ internal fun QueueScreen(
                             onClick = { onPlay(item.id) },
                         )
                         ActionMenu("Queue actions for ${item.track.title}", listOf(
-                            MenuAction("Move up", !playback.shuffle && index > 0) { onMove(item.id, -1) },
-                            MenuAction("Move down", !playback.shuffle && index < items.lastIndex) { onMove(item.id, 1) },
-                            MenuAction("Remove from queue") { onRemove(item.id) },
+                            MenuAction("Move up", playback.connected && !playback.shuffle && index > 0) { onMove(item.id, -1) },
+                            MenuAction("Move down", playback.connected && !playback.shuffle && index < items.lastIndex) { onMove(item.id, 1) },
+                            MenuAction("Remove from queue", playback.connected) { onRemove(item.id) },
                         ))
                     }
                 }
@@ -104,32 +120,23 @@ internal fun PlaybackModes(
 @Composable
 internal fun PlayerListScreen(
     title: String,
-    onBack: () -> Unit,
-    onLibrary: () -> Unit,
-    playback: PlaybackState? = null,
-    onOpenPlayer: () -> Unit = {},
-    onTogglePlayback: () -> Unit = {},
+    onBack: (() -> Unit)? = null,
+    onLibrary: (() -> Unit)? = null,
     actions: @Composable () -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Scaffold(bottomBar = {
-        if (playback?.mediaId != null) {
-            Box(Modifier.fillMaxWidth().navigationBarsPadding(), contentAlignment = Alignment.Center) {
-                MiniPlayer(playback, onOpenPlayer, onTogglePlayback)
-            }
-        }
-    }) { insets ->
+    Scaffold { insets ->
         Box(Modifier.fillMaxSize().padding(insets), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.widthIn(max = 760.dp).fillMaxSize()) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    GlyphButton("Back", Symbol.Back, onBack)
+                    if (onBack != null) GlyphButton("Back", Symbol.Back, onBack)
                     Text(title, Modifier.weight(1f).padding(horizontal = 8.dp),
                         style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     actions()
-                    TextButton(onClick = onLibrary) { Text("Library") }
+                    if (onLibrary != null) TextButton(onClick = onLibrary) { Text("Library") }
                 }
                 content()
             }

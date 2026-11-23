@@ -4,24 +4,26 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -63,49 +65,48 @@ internal fun LibraryScreen(
     onReconnect: () -> Unit,
     onOpenNas: () -> Unit,
     onSettings: () -> Unit,
-    onOpenOffline: () -> Unit,
-    onOpenCollections: () -> Unit,
+    nasStatus: String?,
+    canPlayTrack: (Track) -> Boolean,
     trackMenu: @Composable (Track) -> Unit,
     onPlayTrack: (List<Track>, String) -> Unit,
     loadArtwork: suspend (String, String) -> ByteArray?,
-    onTogglePlayback: () -> Unit,
-    onOpenPlayer: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     var query by rememberSaveable { mutableStateOf("") }
     var view by rememberSaveable { mutableStateOf(LibraryView.Tracks) }
     var groupKey by rememberSaveable { mutableStateOf<String?>(null) }
-    val request = remember(library.tracks, query, view, groupKey) {
-        LibrarySearch(library.tracks, query, view, groupKey)
+    var downloadedOnly by rememberSaveable { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val request = remember(library.tracks, query, view, groupKey, downloadedOnly) {
+        LibrarySearch(library.tracks, query, view, groupKey, downloadedOnly)
     }
+    val showAllTracks = view == LibraryView.Tracks && query.isBlank() && !downloadedOnly
     var completed by remember { mutableStateOf<Pair<LibrarySearch, LibraryResults>?>(null) }
     LaunchedEffect(request) {
+        if (showAllTracks) return@LaunchedEffect
         if (request.query.isNotBlank()) delay(150)
         val results = withContext(Dispatchers.Default) {
+            val sourceTracks = if (request.downloadedOnly) request.tracks.filter(Track::downloaded) else request.tracks
             val selected = request.groupKey?.takeIf { request.view != LibraryView.Tracks }?.let { group ->
-                request.tracks.grouped(request.view).find { it.key == group }
+                sourceTracks.grouped(request.view).find { it.key == group }
             }
-            val tracks = (selected?.tracks ?: request.tracks).matching(request.query)
+            val tracks = (selected?.tracks ?: sourceTracks).matching(request.query)
             val groups = if (request.view != LibraryView.Tracks && selected == null) tracks.grouped(request.view) else emptyList()
             LibraryResults(tracks, groups, selected)
         }
         completed = request to results
     }
-    val results = completed?.takeIf { it.first === request }?.second
+    val results = if (showAllTracks) LibraryResults(library.tracks, emptyList(), null)
+    else completed?.takeIf { (previous, _) ->
+        previous.query == query && previous.view == view && previous.groupKey == groupKey &&
+            previous.downloadedOnly == downloadedOnly
+    }?.second
     val selected = results?.selected
     val visibleTracks = results?.tracks.orEmpty()
     val scanning = library.indexLoading || library.deviceScanning || library.nasScanning
     BackHandler(enabled = groupKey != null) { groupKey = null }
 
-    Scaffold(
-        bottomBar = {
-            if (playback.mediaId != null) {
-                Box(Modifier.fillMaxWidth().navigationBarsPadding(), contentAlignment = Alignment.Center) {
-                    MiniPlayer(playback, onOpenPlayer, onTogglePlayback)
-                }
-            }
-        },
-    ) { insets ->
+    Scaffold { insets ->
         Box(Modifier.fillMaxSize().padding(insets), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.widthIn(max = 760.dp).fillMaxWidth()) {
                 Row(
@@ -127,7 +128,6 @@ internal fun LibraryScreen(
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         TextButton(onClick = onOpenNas) { Text("NAS") }
-                        TextButton(onClick = onOpenOffline) { Text("Offline") }
                         GlyphButton("Refresh library", Symbol.Refresh, onRefresh, enabled = !scanning)
                         GlyphButton("Settings", Symbol.Settings, onSettings)
                     }
@@ -140,7 +140,6 @@ internal fun LibraryScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text("Library", style = MaterialTheme.typography.displaySmall)
-                        TextButton(onClick = onOpenCollections) { Text("Collections") }
                     }
                     val count = library.tracks.size
                     Text(
@@ -175,6 +174,10 @@ internal fun LibraryScreen(
                     }
                 }
 
+                if (nasStatus != null && library.tracks.isNotEmpty()) {
+                    Text(nasStatus, Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                }
                 if (library.tracks.isNotEmpty() || library.hasPermission) {
                     OutlinedTextField(
                         value = query,
@@ -186,7 +189,7 @@ internal fun LibraryScreen(
                             { TextButton(onClick = { query = "" }) { Text("Clear") } }
                         } else null,
                     )
-                    Row(
+                    FlowRow(
                         Modifier.padding(horizontal = 24.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -200,6 +203,14 @@ internal fun LibraryScreen(
                                 label = { Text(option.label) },
                             )
                         }
+                        FilterChip(
+                            selected = downloadedOnly,
+                            onClick = {
+                                downloadedOnly = !downloadedOnly
+                                groupKey = null
+                            },
+                            label = { Text("Downloaded") },
+                        )
                     }
                 }
 
@@ -227,18 +238,21 @@ internal fun LibraryScreen(
                 HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = colors.outlineVariant)
 
                 when {
-                    scanning && library.tracks.isEmpty() -> Unit
+                    scanning && library.tracks.isEmpty() ->
+                        Text("Loading library…", Modifier.padding(24.dp), color = colors.onSurfaceVariant)
                     !library.hasPermission && library.tracks.isEmpty() -> LibraryNotice(
                         "Add music",
                         "Allow device music access or choose a library folder in NAS.",
-                        "Allow access",
+                        "Scan this device",
                         onGrantAccess,
+                        onOpenNas,
                     )
                     library.tracks.isEmpty() -> LibraryNotice(
                         "No tracks found",
                         "Add music to your device or choose a library folder in NAS.",
-                        "Refresh library",
+                        "Scan this device",
                         onRefresh,
+                        onOpenNas,
                     )
                     results == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
                     visibleTracks.isEmpty() -> Text(
@@ -248,6 +262,7 @@ internal fun LibraryScreen(
                     )
                     else -> LazyColumn(
                         modifier = Modifier.fillMaxWidth().weight(1f),
+                        state = listState,
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 9.dp, bottom = 12.dp),
                     ) {
                         if (view == LibraryView.Tracks || selected != null) {
@@ -267,17 +282,19 @@ internal fun LibraryScreen(
                                         subtitle = subtitle,
                                         cover = track,
                                         current = track.uri == playback.mediaId,
-                                        enabled = playback.connected,
+                                        enabled = playback.connected && canPlayTrack(track),
                                         durationMs = track.durationMs,
                                         loadArtwork = loadArtwork,
                                         modifier = Modifier.weight(1f),
-                                        onClick = { onPlayTrack(visibleTracks, track.uri) },
+                                        onClick = {
+                                            onPlayTrack(visibleTracks.filter(canPlayTrack), track.uri)
+                                        },
                                     )
                                     trackMenu(track)
                                 }
                             }
                         } else {
-                            items(results?.groups.orEmpty(), key = { it.key }) { group ->
+                            items(results.groups, key = { it.key }) { group ->
                                 val count = group.tracks.size
                                 LibraryRow(
                                     title = group.title,
@@ -303,6 +320,7 @@ private class LibrarySearch(
     val query: String,
     val view: LibraryView,
     val groupKey: String?,
+    val downloadedOnly: Boolean,
 )
 
 private data class LibraryResults(
@@ -392,7 +410,13 @@ internal fun indexedArtwork(
 }
 
 @Composable
-private fun LibraryNotice(title: String, message: String, action: String, onAction: () -> Unit) {
+private fun LibraryNotice(
+    title: String,
+    message: String,
+    action: String,
+    onAction: () -> Unit,
+    onOpenNas: () -> Unit,
+) {
     Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
         Surface(
             shape = RoundedCornerShape(28.dp),
@@ -417,7 +441,13 @@ private fun LibraryNotice(title: String, message: String, action: String, onActi
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                Button(onClick = onAction, modifier = Modifier.padding(top = 18.dp)) { Text(action) }
+                FlowRow(
+                    Modifier.padding(top = 18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                ) {
+                    Button(onClick = onAction) { Text(action) }
+                    OutlinedButton(onClick = onOpenNas) { Text("Connect to NAS") }
+                }
             }
         }
     }
@@ -462,7 +492,7 @@ internal fun MiniPlayer(playback: PlaybackState, onOpen: () -> Unit, onToggle: (
                     }
                 }
             }
-            PlayButton(playback.playing, onToggle, size = 46.dp)
+            PlayButton(playback.playing, onToggle, enabled = playback.connected, size = 46.dp)
         }
     }
 }

@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -34,6 +35,7 @@ internal class PlaybackQueueStore(context: Context, private val settings: Playba
     private val file = AtomicFile(File(context.noBackupFilesDir, "playback-queue.json"))
     private val io = Dispatchers.IO.limitedParallelism(1)
     private val updates = Channel<PlaybackQueue?>(Channel.CONFLATED)
+    val restoring = MutableStateFlow(true)
     @Volatile private var latest: QueueUpdate? = null
 
     init {
